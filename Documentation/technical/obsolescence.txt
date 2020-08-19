@@ -1,0 +1,497 @@
+Obsolescence
+============
+
+As software projects grow more complex, and involve more people, it is often
+necessary for a single change to mature through a number of revisions between
+its first draft and when it is ready to merge. This can be due to a number of
+reasons.
+
+1. The initial proposal might start out as rough idea posted for comment
+2. The change may fail existing test suites and require fixing
+3. Peer review may identify issues with the change that need to be addressed
+4. Tests for the change itself may evolve after the initial proposal
+
+This process of evolution has usually been handled in one of two ways: either by
+creating a new commit for each revision or by rewriting the history of the
+change using some combination of amending and rebasing the original commit. Each
+of these methods has its strengths and weaknesses.
+
+As a change matures, changes to it usually fall into one of two categories.
+
+1. Evolving the change itself
+2. Keeping the change up to date with the rest of the project
+
+The Merge Method
+----------------
+
+In the merge method, rewriting history, especially if that history has been
+shared outside a workspace, is consider bad practice. When the change itself
+needs to evolve, an author creates new commits, leaving the old ones intact. To
+keep in sync with the rest of the project, an author occasionally creates a
+merge commit which brings the change up to date with the rest of the project,
+and fixes any conflicts that arise.
+
+This method is strong in the way it preserves a history of the change exactly as
+it unfolded. If the change is shared with others and then it continues to
+evolve, potentially in multiple streams by distributed parties, the common base
+can be found and used to bring the streams back together using the robust
+merging functionality that git provides.
+
+This method also has its weaknesses. The project history ends up being far more
+complicated to read because a single logical change, meant to be merged into a
+project in a single atomic operation, comes in many commits. Even trivial
+mistakes that were easily caught in peer review, are permanently stored in the
+project's mainline history. It can be like a minefield of red herrings that can
+easily trip up `git bisect` operations and result in endless "how did this ever
+work" moments where you're going through the git log and you don't realize that
+a problem with a commit you're reading was never actually a real problem because
+it never really existed outside of development.
+
+The Rebase Method
+-----------------
+
+In the rebase method, rewriting history is the way to go. When the change itself
+needs to be modified, an author amends the existing commit, destroying the
+original one. To keep in sync with the rest of the project, an author rebases
+it. This essentially goes through the same process as merging but the result is
+a new amended commit that obsoletes, and forgets, the old one. In both cases,
+the new commit is proposed by force-pushing to a branch.
+
+This method is strong in the way it leaves the project history with fewer
+commits, each of which represents the whole of a mature change. Git bisect has
+an easier time rooting out the origin of real problems and sorting through the
+project history commit by commit is more meaningful because it represents a more
+concise and accurate picture of the project's public history.
+
+This method also has its weaknesses. Over the course of a change, the history of
+the change is destroyed. Some tools, such as Gerrit, attempt to save this
+history by attaching an immutable change id which is tracked as the change is
+amended and resubmitted. However, it is linear and limited. It breaks down when
+a change begins to evolve in multiple divergent streams of effort. For example,
+a reviewer might see an obvious error and attempt to correct it on the spot. Or,
+the reviewer might find it easier to suggest a code change explicitly rather
+than try to explain what they want. If the author is working on something else
+in the meantime, they can easily, and undetectably, clobber these suggestions in
+their next push.
+
+The common base between these streams is continually destroyed by amending
+history and it can become very difficult to make sense of it. The tool cannot
+tell where things diverged and therefore cannot tell if something is getting
+clobbered. If a larger change is broken into multiple commits, this job becomes
+even more difficult and confusing.
+
+The Obsolescence Method
+-----------------------
+
+This proposal is to keep the development history of a proposed change as a
+second orthogonal dimension of history.
+
+The project's public history is the first dimension. This is what git users are
+already familiar with. It is recorded using a directed acyclic graph (DAG) of
+commits where each points to its predecessors with one or more `parent` headers
+with the hash id(s) (e.g. SHA1) of the commit(s) that came before. Nothing is
+different here. This is what we've all known since the beginning of git.
+
+To clean up the project history, yet avoid destructively rewriting history, a
+second orthogonal dimension of history records the history of each change and
+how it matured before being accepted as part of the project in what we call an
+obsolescence graph.
+
+Normally, looking through the history of a project will skip this dimension of
+history. Tools like git bisect that use it primarily run on the first
+dimension. Then, it might optionally drill into the second after landing on a
+particular change. This will be a common theme for anything examining project
+history. First, check the primary history; it will be more concise and
+represent a view of the project history sufficient for anyone who isn't closely
+involved in the development of a particular change. Then, if you need to know
+more about a change, you can drill into it.
+
+The obsolescence graph must support the following:
+
+1. Record the progression of a change, through its various revisions
+2. Allow devolopment to naturally diverge into multiple streams of development
+3. Provide the tools to bring together divergent streams into one
+
+This looks familiar. This is exactly what a project's commit history does for
+the project itself. So, why not solve it in rougly the same way? We propose
+adding a second DAG of commits that works the same way but is orthogonal to the
+first one.
+
+When a change itself needs to be modified, an author amends the existing
+commit. Instead of destroying the original, it leaves a directed edge pointing
+to it indicating that the new one "obsoletes" it. It obsoletes the old commit,
+but does not forget it.
+
+To keep in sync with the rest of the project, an author rebases the change
+again to a new upstream parent, leaving yet another edge pointing to the commit
+it obsoletes and preserving it.
+
+The result is a primary history that is clean like in the rebase method but
+maintains full history intact like in the merge method. If you were to flatten
+the two DAGs into one, you'd see a history that looks exactly like you used the
+merge method. But, with the extra dimension, the high-level is separate from the
+nitty-gritty.
+
+Here are some things that you can do with an obsolescence graph.
+
+1. Reviewers can easily find modifications made since the last time they
+   reviewed a change.
+2. Rewritten branches, which used to require --force to update on a push, can
+   be allowed without --force as long as the change histories are all
+   fast-forward.
+3. If you rebase a stale version of a change and try to push the result over a
+   newer revision, git can catch this and reject the push. You will then know
+   that you need to fetch the latest changes and merge the divergent heads of
+   the change together.
+4. Different collaborators can contribute to a change and then merge their work
+   together easily by finding the best merge base within the change itself.
+5. Users can view the history of a change directly, see what rebases and edits
+   have been made and even see who committed each revision.
+6. Users can bisect on a change to see where something went wrong over the
+   course of developing it.
+7. A change can be easily tracked through various branches as it progresses
+   through development or gets cherry-picked.
+8. A tool like gerrit can use it as a more powerful and expressive replacement
+   for its change-id.
+
+The [use cases](#use-cases) section below contains a list of use cases that
+have been considered for this new feature. For each use case, it shows the
+commands used to accomplish the goal and describes git will use and modify the
+obsolescence graph in the proposed implementation.
+
+The [persistence](#persistence) section discusses another very important
+consideration. How the graph will be persisted along with the project data and
+how these data will be exchanged in operations such as fetch, pull, and push.
+
+Use Cases
+=========
+
+These are use cases for working with changes using an obsolescence graph. For
+each one, the git commands to accomplish the task are shown followed by a
+description of how the behavior of the git tool is expected to change to
+support it. You'll notice that most of the use cases use the same commands as
+before but they've been enhanced to track change history. In cases where the
+commands need to be called differently, it is noted.
+
+Change history is recorded using any number of *obsoletes* edges pointing from
+a commit to the predecessor that it replaces. Across all the commits that make
+up the history of a change, they form a directed acyclic graph (DAG) which is
+orthogonal to the project history DAG.
+
+The `<branch>` used in the commands below could be a topic or feature branch or
+it could be a *smart* branch (e.g. refs/for/master a la gerrit). In this case,
+the remote server automatically maps newly proposed revisions to existing
+change branches, or creates new ones, based on a traversal of the
+*obsolescence* DAG to changes that it already knows about. A change is uniquely
+identified by traversing it in a depth-first search, always following the first
+edge from a commit, until it hits a leaf commit.
+
+Create a New Change
+-------------------
+
+    $ git commit
+
+There is nothing different here. A new change is a commit without any
+*obsoletes* edges to previous commits.
+
+Create a New Revision of an Existing Change
+-------------------------------------------
+
+    $ git commit --amend
+
+When an existing change is amended, a new commit gets recorded with a
+*obsoletes* edge pointing from it to the previous one. Otherwise, this
+operation is the same as before. Anything in the commit can be changed
+including the author and committer headers and the commit message. This allows
+changes to any part of a change to be tracked: its content and the meta
+information related to the commit.
+
+Propose (Push) a New Change to a Remote
+---------------------------------------
+
+    $ git push <remote> HEAD:<branch>
+
+The latest commit in a change is sent to the remote just like before. However,
+it is critical that any other commits and objects referenced in the
+*obsolescence* DAG, that do not already exist on the remote, get sent along
+with it. This ensures that the remote can reconstruct the entire DAG
+representing the change. When the remote server receives it, it can traverse
+each change from its new head commit to the first leaf to identify the change
+id. When it sees that it does not already have a change with that id, it
+creates a new one.
+
+Change History Compression
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If the local branch has more than one new commit in a new change history, it
+should be possible to flatten, or compress, the change history into a single
+commit. However, care should be taken here to avoid compressing the history of
+a change that originated, or has already been shared, with a different remote
+or branch. It may be possible to detect that the change likely originated
+locally and has not yet been shared by examining remote branches.
+
+Fetch a Change from a Remote onto a Local Branch
+------------------------------------------------
+
+    $ git fetch <remote>
+    $ git checkout -b <branch> <remote>/<branch>
+
+When fetching branches from a remote, the change's obsolescence DAG needs to be
+traversed to include objects reachable through it in the fetch.
+
+Push a New Revision to an Existing Change on a Remote
+-----------------------------------------------------
+
+    $ git push <remote> HEAD:<branch>
+
+In this use case, part of the change history already exists on the remote. When
+this happens, it needs to ensure that updating the change does not result in
+multiple head commits in the remote branch. This is analogous to the
+fast-forward check on the project history DAG for branch updates except that it
+uses the change's obsolescence DAG instead. If the fast-forward check fails
+then the update must be rejected. The pusher is expected to fetch the latest
+from the remote and merge the two heads in the change locally before attempting
+to push again.
+
+It is important to note here that the fast-forward check on the change history
+DAG can actually relax the fast-forward check on the project history. The most
+common reason to use the --force flag to push, which is to update a remote
+branch after rebase, is covered by this. Force pushes to a remote should now be
+mostly a thing of the past.
+
+It should be possible to disable this on branches such as the master branch of
+the repository where changes are considered locked when they've merged. It
+should probably be locked by default and then unlocked with explicit policy on
+development branches.
+
+If more than one change is being updated on the remote, then the fast-forward
+check must pass on all of them to accept it.
+
+Propose Updates to a Remote Branch Using a Magic Ref
+----------------------------------------------------
+
+It is possible to support magic refs for pushing changes that you want to
+publish on a review server or something. A magic ref is something like
+`refs/for/master` where you can use it as a push target but your works ends up
+being placed onto a different branch based on some metadata contained in the commit.
+
+Gerrit does this by embedding a change-id into the commit message of each
+commit. When you push, it updates the branch for each change you're pushing.
+
+Obsolescence graphs can be used for this mapping too. When pushing to a magic
+ref, you automatically know the target branch, because it is mentioned in the
+name. When updates to an obsolescence graph are pushed, the changes can be
+identified by traversing it to find overlap with changes it already knows about
+in the context of the target branch. The server can make sure that each change
+can have only one head commit and reject any updates that diverge. This ensures
+that divergent changes are resolved locally before attempting to publish.
+
+This sounds a lot like fast-forward vs force-push updates to branches that we
+already have it git. It really is the same concept, except it is applied to
+*obsolescence* graphs instead of the *parent* DAG. Please note that many
+updates that pass the fast-forward check on the *obsolescence* DAGs for each
+change may still fail the fast-forward check on the *parent* DAG. This is
+totally by design. The server has the freedom to relax its constraints on
+updating the branch's *parent* DAG (even without --force) as long as the
+changes are fast-forward. This nearly eliminates all common use cases for the
+--force flag which makes git a safer place for everyone.
+
+Update a Change to the Latest Upstream
+--------------------------------------
+
+    $ git fetch [<remote>]
+    $ git rebase [<remote>/<upstream branch>]
+
+In this case, some other changes have been merged into the upstream branch and
+we want to update our change to include the latest. The rebase command now adds
+*obsoletes* edges to each new commit it creates.
+
+This shows that a change is allowed to change parents as it matures.
+
+If the remote has a new revision for the change you're attempting to rebase,
+then the rebase will abort without doing anything. See the use case below to
+"Update to the Latest Revision from a Remote" to resolve this first and then
+try this again.
+
+Comparing Two Revisions within the Same Change
+----------------------------------------------
+
+    # Feedback is welcome on this. Can you think of a better way?
+    $ git diff --change <old commit> <new commit>
+
+The previous use case, where a change was rebased, illustrates how comparing
+revisions within a change can get complicated. A naive diff between these two
+commits would show all of the updates to the upstream branch. This may not be
+what you want.
+
+This use case introduces a new way to compare two commits. Before running diff,
+the old commit needs to be rebased to the parent of the new commit so that they
+can be compared in the same context. This rebase can result in merge conflicts.
+This is ok, just include the conflict markers in the diff so that you can see
+what conflicts exist between the two revisions and how they were resolved.
+
+Show the Log of Revisions in a Change
+-------------------------------------
+
+    $ git log --change <commit>
+
+The `--change` flag to log tells it to traverse the change history DAG instead
+of the project history DAG. Note that the commit messages for all of the commits
+are likely to be the same or similar.
+
+If the `-p` flag is passed to this command to show the actual content changes
+then this should diff the commits in the new way described in the previous use
+case.
+
+Fetch New Revisions to an Existing Change on a Remote
+-----------------------------------------------------
+
+    $ git fetch [<remote>]
+
+This command fetches the remote branches and any new revisions to changes
+that they carry.
+
+See How the Remote and Local Revisions Diverged on a Change
+-----------------------------------------------------------
+
+    $ git show-change <commit>
+
+This command is like `show-branch` except that it works on a change. It will
+first traverse the change DAG from `<commit>` to identify the change id, then it
+will look for other heads that have diverged from the change on other branches
+and display how they trace back to their common merge bases.
+
+Update to the Latest Revision from a Remote
+-------------------------------------------
+
+    $ git fetch [<remote>]
+    $ git rebase [--keep-base] <remote>/<branch>
+
+This is where the rubber hits the road in resolving divergent heads between
+branches. Every commit, on both sides since the two branches diverged, needs to
+be mapped to a change, by finding intersecting *obsolescence* graphs, looking
+for changes that exist in *both* branches. These are divergent changes. The
+*obsolescence* graph can be used to merge them together by finding a merge base
+and performing a merge similar to merging branches but with a twist.
+
+The twist is that this use case is complicated by the fact that a change can be
+rebased arbitrarily to a new parent between revisions. Finding a merge base
+should be roughly the same but then the three commits involved in the merge
+need to first be normalized to a common parent so that they can be compared in
+the same context. There are a few ways that this could be done that should be
+explored. How to do this best is still an open question.
+
+If there are multiple open changes in either the remote or the local branch
+then they should be merged one by one in the order they appear in the remote
+branch.
+
+TODO Changes could be reordered, dropped, or added on the remote. What to do in
+each of these cases needs to be specified in detail. Are there cases where the
+local change order should be used instead? I think the key is in finding the
+merge base for each change and seeing which side rebased the change. But what
+if both sides reordered or rebased changes? This is probably the trickiest part
+of this project to get right.
+
+Cherry-pick a Change to a New Branch
+------------------------------------
+
+    $ git cherry-pick <commit>
+
+This command leaves an edge from the new commit to the original. The
+*obsolescence* graph simply continues to track it into the new branch. The key
+is the context. A change can exist in many branches at once. The head of the
+change in the context of any given branch is the commit that is directly
+reachable traversing the *parent* DAG from that branch's head. So, while the
+cherry-pick *obsoletes* the original commit in the new branch, it could still
+be the head commit for the source branch, and thus not obsolete in that
+context.
+
+These relationhips may need to be treated differently in different contexts.
+For example, if the change is already merged into the source branch and thus,
+considered finished in that context, but is under review in the new branch,
+knowing the source branch actually doesn't matter.
+
+However, if you want to later merge two branches that have changes
+cherry-picked between them, knowing that commits in the two branches might be
+different incarnations of the same change will be extremely useful.
+
+The context is key here. When you're just working with one local branch, all
+that matters is the head commit referenced from your branch and the
+*obsolescence* DAG reachable from it. As soon as you involve a second branch by
+pushing, merging, rebasing, or whatever, then commits in the two branches need
+to be examined to see which ones are different incarnations of the same change
+in the two branches. If so, they will both have overlapping obsolescence
+graphs.
+
+Combine Multiple Changes into One Change
+----------------------------------------
+
+    $ git rebase -i # squash or fixup
+
+Any number of changes can be squashed into a single change. The resulting
+commit should have multiple *obsoletes* edges, one for each contributing change
+in the order they appeared before squashing them together. The resulting change
+will take on the id of the first change in the original list.
+
+Split a Single Change into Multiple Changes
+-------------------------------------------
+
+    $ git rebase -i
+
+This one is a little bit harder. Normally, to split a git commit into multiple
+new commits, I would first reset to the commit before with `git reset HEAD~` and
+then commit multiple changes from that starting point. If I want to split a
+commit other than HEAD, I'd just combine it with `git rebase -i` using the
+`edit` action.
+
+However, how will it know to associate all of the new commits with the old one?
+We might need something new to do this. It might be possible to tap into the
+machinery of an interactive `git rebase` to do the book keeping automatically.
+How the user creates this specific scenario is still an open question. Ideas?
+
+The result should be more than one new commit that all point to the same commit
+as the *obsolete* predecessor. But, how do you tell the difference between a
+change that has diverged into multiple heads and a change that was split into
+two commits? The difference is that when multiple commits were split from a
+single commit, one of them will be reachable from the other through the
+project's *parent* DAG. In the case of multiple divergent heads, the two
+commits will exist somewhat independently in different branches. If this is
+detected, then the obsolescence graph should be considered broken into two
+separate changes at that point.
+
+Reorder a Sequence of Changes
+-----------------------------
+
+    $ git rebase -i
+
+It should be possible to reorder changes in a sequence using the normal
+interactive rebase mechanism.
+
+Complex Sequences
+-----------------
+
+TODO If changes are combined on one branch and new revisions to the individual
+changes are introduced on another, this will complicate merging divergent
+change heads and needs to be better thought out.
+
+TODO If changes are split on one branch and new revisions to the original larger
+change are introduced on another branch, this will complicate merging change
+heads and needs to be better thought out.
+
+Garbage Collect a Repository with Change Revisions
+--------------------------------------------------
+
+`git gc` needs to know how to identify commits that are part of change history
+and preserve the objects reachable from them. Most of them will not be reachable
+through the normal project history traversal and would probably get purged
+without making this operation change history aware.
+
+Persistence
+===========
+
+TODO Discuss options for storing the obsolescence graph and any other metadata
+needed. Also, how will these data be shared during fetch and push operations.
+The following implementations should be considered. TODO (should we consider more)
+
+1. Embed the edge as an *obsoletes* header in every new rewritten commit
+2. Use a special commit as an edge that points to the original and the rewritten commit.
